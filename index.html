@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="de" class="dark h-full bg-slate-950">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Radar Community App - Blitzer & Live-Polizei Warnungen</title>
+
+  <!-- PWA Meta Tags & Mobile App Display -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="description" content="Echtzeit Blitzer, Polizeikontrollen und Gefahrenstellen Community App" />
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            radar: {
+              red: '#ef4444',
+              blue: '#3b82f6',
+              amber: '#f59e0b',
+              neon: '#22c55e',
+              dark: '#0f172a',
+              card: '#1e293b'
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Leaflet CSS & JS for Interactive Map -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+  <!-- Custom CSS for Markers and Map -->
+  <style>
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+
+    #leaflet-map {
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+
+    .radar-marker {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      box-shadow: 0 0 15px rgba(0,0,0,0.5);
+      transition: transform 0.2s ease;
+    }
+    .radar-marker-blitzer {
+      background: radial-gradient(circle, #ef4444 0%, #991b1b 100%);
+      border: 2px solid #fca5a5;
+      box-shadow: 0 0 20px #ef4444;
+    }
+    .radar-marker-police {
+      background: radial-gradient(circle, #3b82f6 0%, #1e40af 100%);
+      border: 2px solid #93c5fd;
+      box-shadow: 0 0 20px #3b82f6;
+    }
+    .radar-marker-danger {
+      background: radial-gradient(circle, #f59e0b 0%, #b45309 100%);
+      border: 2px solid #fde68a;
+      box-shadow: 0 0 20px #f59e0b;
+    }
+
+    .user-gps-beacon {
+      width: 20px;
+      height: 20px;
+      background: #3b82f6;
+      border: 3px solid #ffffff;
+      border-radius: 50%;
+      box-shadow: 0 0 12px #3b82f6;
+      position: relative;
+    }
+    .user-gps-beacon::after {
+      content: '';
+      position: absolute;
+      top: -10px;
+      left: -10px;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: rgba(59, 130, 246, 0.4);
+      animation: ping 1.8s infinite;
+    }
+
+    .glass-card {
+      background: rgba(30, 41, 59, 0.85);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+  </style>
+</head>
+
+<body class="h-full bg-slate-950 text-slate-100 flex flex-col font-sans overflow-hidden select-none">
+  <!-- App Container -->
+  <div id="app-container" class="relative w-full max-w-md mx-auto h-full flex flex-col bg-slate-900 shadow-2xl overflow-hidden md:border-x md:border-slate-800">
+    
+    <!-- Top Header -->
+    <header class="z-30 shrink-0 bg-slate-900/95 backdrop-blur border-b border-slate-800 px-4 py-3 flex items-center justify-between shadow-md">
+      <div class="flex items-center gap-2.5">
+        <div class="relative w-8 h-8 rounded-full bg-gradient-to-tr from-red-600 to-emerald-500 p-0.5 flex items-center justify-center">
+          <div class="w-full h-full bg-slate-900 rounded-full flex items-center justify-center">
+            <svg class="w-4 h-4 text-emerald-400 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path>
+            </svg>
+          </div>
+        </div>
+        <div>
+          <h1 class="text-sm font-bold tracking-wider text-slate-100 flex items-center gap-1.5">
+            RADAR COMMUNITY
+            <span class="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+          </h1>
+          <p id="cloud-status-text" class="text-[10px] text-emerald-400 font-medium">● Live-Verbindung aktiv</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-1.5">
+        <button id="btn-toggle-audio" onclick="toggleAudioWarning()" title="Tonwarnungen" class="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 transition border border-slate-700/50 flex items-center gap-1 text-xs">
+          <span id="audio-icon">🔊</span>
+          <span id="audio-label" class="hidden sm:inline font-semibold">Ton An</span>
+        </button>
+        <button onclick="recenterGPS()" title="GPS Zentrieren" class="p-2 rounded-xl bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 transition">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm8 4c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8 8 3.58 8 8z"></path>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main View -->
+    <main class="relative flex-1 overflow-hidden">
+      
+      <!-- VIEW 1: MAP -->
+      <section id="view-map" class="w-full h-full relative">
+        <div id="leaflet-map"></div>
+
+        <div class="absolute top-3 left-3 right-3 z-10 flex gap-2">
+          <div class="flex-1 relative glass-card rounded-2xl shadow-xl border border-slate-700/60 overflow-hidden flex items-center px-3 py-1.5">
+            <svg class="w-4 h-4 text-slate-400 shrink-0 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+            </svg>
+            <input type="text" id="map-search-input" onkeypress="if(event.key==='Enter') searchLocationOnMap()" placeholder="Ort/Straße suchen (z.B. Waldshut)..." class="bg-transparent w-full text-xs text-slate-100 placeholder-slate-400 focus:outline-none" />
+            <button onclick="searchLocationOnMap()" class="text-xs text-blue-400 font-semibold px-2 py-1 hover:text-blue-300">
+              Suchen
+            </button>
+          </div>
+          
+          <button onclick="toggleMapStyle()" title="Kartenstil wechseln" class="glass-card p-2.5 rounded-2xl border border-slate-700/60 text-slate-300 hover:text-white shadow-xl flex items-center justify-center">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"></path>
+            </svg>
+          </button>
+        </div>
+
+        <div class="absolute bottom-4 left-4 z-10 glass-card px-3.5 py-2 rounded-2xl border border-slate-700/70 flex items-center gap-3 shadow-2xl">
+          <div class="text-center">
+            <span id="speedometer-val" class="block text-xl font-extrabold text-emerald-400 leading-none">0</span>
+            <span class="text-[9px] uppercase tracking-wider text-slate-400 font-bold">KM/H</span>
+          </div>
+          <div class="h-6 w-[1px] bg-slate-700"></div>
+          <div class="text-[10px] text-slate-300 leading-tight">
+            <div id="gps-accuracy-text" class="text-slate-400">GPS: <span class="text-emerald-400 font-semibold">Warte auf GPS...</span></div>
+            <div id="nearby-count-text" class="font-bold text-amber-400">0 Meldungen nah</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 2: LIVE FEED -->
+      <section id="view-feed" class="hidden w-full h-full bg-slate-950 p-4 overflow-y-auto pb-24">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-lg font-extrabold text-white flex items-center gap-2">
+            <span>⚡ Live Community-Feed</span>
+            <span id="feed-badge-count" class="text-xs bg-red-500/20 text-red-400 border border-red-500/40 px-2 py-0.5 rounded-full font-bold">0</span>
+          </h2>
+          <button onclick="refreshFeedData()" class="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 font-semibold">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+            Neu laden
+          </button>
+        </div>
+
+        <div class="flex gap-1.5 mb-4 overflow-x-auto pb-1 text-xs">
+          <button onclick="filterFeed('all')" id="filter-all" class="px-3.5 py-1.5 rounded-xl font-semibold bg-blue-600 text-white shrink-0">Alle</button>
+          <button onclick="filterFeed('blitzer')" id="filter-blitzer" class="px-3.5 py-1.5 rounded-xl font-semibold bg-slate-800 text-slate-300 border border-slate-700 shrink-0">📸 Blitzer</button>
+          <button onclick="filterFeed('police')" id="filter-police" class="px-3.5 py-1.5 rounded-xl font-semibold bg-slate-800 text-slate-300 border border-slate-700 shrink-0">🚨 Polizei</button>
+          <button onclick="filterFeed('danger')" id="filter-danger" class="px-3.5 py-1.5 rounded-xl font-semibold bg-slate-800 text-slate-300 border border-slate-700 shrink-0">⚠️ Gefahren</button>
+        </div>
+
+        <div id="feed-list-container" class="space-y-3">
+          <div class="p-6 text-center text-slate-500 text-xs">Lade Meldungen...</div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Bottom Navigation -->
+    <nav class="z-30 shrink-0 bg-slate-900/95 backdrop-blur border-t border-slate-800 px-6 py-2.5 flex items-center justify-around relative">
+      <button onclick="switchTab('map')" id="nav-map" class="flex flex-col items-center text-blue-500 font-bold transition-all">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"></path></svg>
+        <span class="text-[11px] mt-0.5">Karte</span>
+      </button>
+
+      <div class="relative -top-5">
+        <button onclick="openReportModal()" class="w-14 h-14 rounded-full bg-gradient-to-tr from-red-600 via-red-500 to-amber-500 p-3.5 text-white shadow-xl shadow-red-500/30 hover:scale-105 active:scale-95 transition flex items-center justify-center border-2 border-slate-900">
+          <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"></path></svg>
+        </button>
+      </div>
+
+      <button onclick="switchTab('feed')" id="nav-feed" class="flex flex-col items-center text-slate-400 hover:text-slate-200 transition-all">
+        <div class="relative">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+          <span id="nav-feed-badge" class="absolute -top-1 -right-2 bg-red-500 text-white text-[9px] rounded-full w-4 h-4 flex items-center justify-center font-bold">0</span>
+        </div>
+        <span class="text-[11px] mt-0.5">Live-Feed</span>
+      </button>
+    </nav>
+
+    <!-- Report Modal -->
+    <div id="report-modal" class="hidden fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div class="w-full max-w-md bg-slate-900 border-t sm:border border-slate-800 rounded-t-3xl sm:rounded-3xl p-5 shadow-2xl">
+        <div class="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
+          <div>
+            <h3 class="text-base font-extrabold text-white">⚡ Radar / Gefahr Melden</h3>
+            <p class="text-[11px] text-slate-400">Warne andere Fahrer live in deiner Umgebung</p>
+          </div>
+          <button onclick="closeReportModal()" class="p-1.5 rounded-full bg-slate-800 text-slate-400 hover:text-white">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+          </button>
+        </div>
+
+        <form id="report-form" onsubmit="submitNewReport(event)" class="space-y-4">
+          <div>
+            <label class="block text-xs font-bold text-slate-300 mb-2">Kategorie wählen:</label>
+            <div class="grid grid-cols-2 gap-2">
+              <label class="cursor-pointer">
+                <input type="radio" name="alert_type" value="blitzer_mobil" checked class="peer sr-only" />
+                <div class="p-3 rounded-2xl bg-slate-800/80 border border-slate-700 peer-checked:border-red-500 peer-checked:bg-red-500/10 transition flex items-center gap-2">
+                  <span class="text-xl">📸</span>
+                  <div class="text-left">
+                    <div class="text-xs font-bold text-slate-100">Mobiler Blitzer</div>
+                    <div class="text-[9px] text-slate-400">Dreibein / Laser</div>
+                  </div>
+                </div>
+              </label>
+
+              <label class="cursor-pointer">
+                <input type="radio" name="alert_type" value="blitzer_stat" class="peer sr-only" />
+                <div class="p-3 rounded-2xl bg-slate-800/80 border border-slate-700 peer-checked:border-red-500 peer-checked:bg-red-500/10 transition flex items-center gap-2">
+                  <span class="text-xl">🛑</span>
+                  <div class="text-left">
+                    <div class="text-xs font-bold text-slate-100">Stationär</div>
+                    <div class="text-[9px] text-slate-400">Fester Starkasten</div>
+                  </div>
+                </div>
+              </label>
+
+              <label class="cursor-pointer">
+                <input type="radio" name="alert_type" value="polizei" class="peer sr-only" />
+                <div class="p-3 rounded-2xl bg-slate-800/80 border border-slate-700 peer-checked:border-blue-500 peer-checked:bg-blue-500/10 transition flex items-center gap-2">
+                  <span class="text-xl">🚨</span>
+                  <div class="text-left">
+                    <div class="text-xs font-bold text-slate-100">Polizei</div>
+                    <div class="text-[9px] text-slate-400">Verkehrskontrolle</div>
+                  </div>
+                </div>
+              </label>
+
+              <label class="cursor-pointer">
+                <input type="radio" name="alert_type" value="gefahr" class="peer sr-only" />
+                <div class="p-3 rounded-2xl bg-slate-800/80 border border-slate-700 peer-checked:border-amber-500 peer-checked:bg-amber-500/10 transition flex items-center gap-2">
+                  <span class="text-xl">⚠️</span>
+                  <div class="text-left">
+                    <div class="text-xs font-bold text-slate-100">Gefahr / Unfall</div>
+                    <div class="text-[9px] text-slate-400">Stau / Baustelle</div>
+                  </div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="block text-xs font-bold text-slate-300">Ort / Straße:</label>
+              <button type="button" onclick="useCurrentGPSForReport()" class="text-[11px] text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1">
+                <span>📍 Mein GPS-Standort</span>
+              </button>
+            </div>
+            <input type="text" id="report-location-input" required placeholder="z.B. Waldshut B34 oder Hauptstraße..." class="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500" />
+          </div>
+
+          <div>
+            <label class="block text-xs font-bold text-slate-300 mb-1">Zusatzinfo (Optional):</label>
+            <input type="text" id="report-text-input" placeholder="z.B. Grauer Caddy Richtung Ortsausgang..." class="w-full px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500" />
+          </div>
+
+          <button type="submit" id="btn-submit-report" class="w-full py-3 bg-gradient-to-r from-red-600 to-amber-600 hover:from-red-500 hover:to-amber-500 text-white font-bold rounded-2xl text-xs shadow-xl transition flex items-center justify-center gap-2">
+            <span>🚀 Live Speichern & Warnen</span>
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toast-container" class="fixed top-16 left-1/2 -translate-x-1/2 z-50 pointer-events-none flex flex-col items-center gap-2 w-full max-w-xs px-4"></div>
+
+  </div>
+
+  <!-- JavaScript Logic -->
+  <script>
+    let alertsList = [];
+    let userPosition = { lat: 47.622, lng: 8.214 };
+    let userMapMarker = null;
+    let userAccuracyCircle = null;
+    let initialGPSCentered = false;
+    let mapInstance = null;
+    let mapMarkersMap = new Map();
+    let audioWarningsEnabled = true;
+    let currentTileLayer = null;
+    let currentTileMode = 'dark';
+    let activeFeedCategory = 'all';
+
+    // Rules: Police expires after 1 hour (3600000ms), Blitzers/Alerts expire on >= 5 downvotes
+    function isAlertActive(alert) {
+      if (!alert) return false;
+      if ((alert.downvotes || 0) >= 5) return false;
+      if (alert.type === 'polizei') {
+        const ONE_HOUR_MS = 60 * 60 * 1000;
+        if (Date.now() - (alert.timestamp || 0) > ONE_HOUR_MS) return false;
+      }
+      return true;
+    }
+
+    const INITIAL_SEED_ALERTS = [
+      {
+        id: 'seed_1',
+        type: 'blitzer_mobil',
+        location_name: 'Polizei Waldshut B34',
+        raw_text: 'Grauer VW Transporter mit Laserpistole in der 50er Zone',
+        lat: 47.6225,
+        lng: 8.2139,
+        timestamp: Date.now() - 1000 * 60 * 12,
+        upvotes: 8,
+        downvotes: 0
+      },
+      {
+        id: 'seed_2',
+        type: 'polizei',
+        location_name: 'Wallenhorst B68',
+        raw_text: 'Allgemeine Verkehrskontrolle bei der Tankstelle',
+        lat: 52.3521,
+        lng: 8.0189,
+        timestamp: Date.now() - 1000 * 60 * 20,
+        upvotes: 14,
+        downvotes: 1
+      },
+      {
+        id: 'seed_3',
+        type: 'blitzer_stat',
+        location_name: 'Murg Hauptstraße',
+        raw_text: 'Fester Blitzer nach der Kurve scharf geschaltet',
+        lat: 47.5542,
+        lng: 8.0211,
+        timestamp: Date.now() - 1000 * 60 * 40,
+        upvotes: 5,
+        downvotes: 0
+      }
+    ];
+
+    function initMapEngine() {
+      mapInstance = L.map('leaflet-map', { zoomControl: false, attributionControl: false }).setView([userPosition.lat, userPosition.lng], 13);
+
+      currentTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(mapInstance);
+
+      const userBeaconIcon = L.divIcon({
+        className: 'custom-user-beacon',
+        html: '<div class="user-gps-beacon"></div>',
+        iconSize: [20, 20],
+        iconAnchor: [10, 10]
+      });
+      userMapMarker = L.marker([userPosition.lat, userPosition.lng], { icon: userBeaconIcon }).addTo(mapInstance);
+
+      mapInstance.on('click', function(e) {
+        userPosition.lat = e.latlng.lat;
+        userPosition.lng = e.latlng.lng;
+        if (userMapMarker) userMapMarker.setLatLng([e.latlng.lat, e.latlng.lng]);
+        document.getElementById('gps-accuracy-text').innerHTML = 'GPS Status: <span class="text-amber-400 font-semibold">Manuell gesetzt</span>';
+        showToast("📍 Standort manuell angepasst");
+        checkProximityAndWarn();
+        updateFeedListUI();
+      });
+
+      if ('geolocation' in navigator) {
+        const updateGPS = (pos) => {
+          userPosition.lat = pos.coords.latitude;
+          userPosition.lng = pos.coords.longitude;
+          const accuracy = Math.round(pos.coords.accuracy || 0);
+
+          if (userMapMarker) userMapMarker.setLatLng([userPosition.lat, userPosition.lng]);
+
+          if (!userAccuracyCircle) {
+            userAccuracyCircle = L.circle([userPosition.lat, userPosition.lng], {
+              radius: accuracy, color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.15, weight: 1
+            }).addTo(mapInstance);
+          } else {
+            userAccuracyCircle.setLatLng([userPosition.lat, userPosition.lng]);
+            userAccuracyCircle.setRadius(accuracy);
+          }
+
+          if (!initialGPSCentered) {
+            mapInstance.flyTo([userPosition.lat, userPosition.lng], 15, { animate: true });
+            initialGPSCentered = true;
+          }
+
+          const speedKmh = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
+          document.getElementById('speedometer-val').textContent = speedKmh;
+          document.getElementById('gps-accuracy-text').innerHTML = `GPS: <span class="text-emerald-400 font-semibold">Exakt (±${accuracy}m)</span>`;
+
+          checkProximityAndWarn();
+          updateFeedListUI();
+        };
+
+        navigator.geolocation.getCurrentPosition(updateGPS, () => {}, { enableHighAccuracy: true, timeout: 10000 });
+        navigator.geolocation.watchPosition(updateGPS, () => {}, { enableHighAccuracy: true, timeout: 15000, maximumAge: 2000 });
+      }
+    }
+
+    function toggleMapStyle() {
+      if (!mapInstance) return;
+      mapInstance.removeLayer(currentTileLayer);
+
+      if (currentTileMode === 'dark') {
+        currentTileMode = 'satellite';
+        currentTileLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 18 });
+        showToast("🗺️ Satellitenkarte aktiviert");
+      } else {
+        currentTileMode = 'dark';
+        currentTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 });
+        showToast("🌙 Dark Radar Style aktiviert");
+      }
+      currentTileLayer.addTo(mapInstance);
+    }
+
+    function recenterGPS() {
+      if (mapInstance && userPosition) {
+        mapInstance.flyTo([userPosition.lat, userPosition.lng], 14, { animate: true });
+        showToast("📍 Auf GPS zentriert");
+      }
+    }
+
+    function renderMapMarkers() {
+      if (!mapInstance) return;
+      mapMarkersMap.forEach((m) => mapInstance.removeLayer(m));
+      mapMarkersMap.clear();
+
+      let countNearby = 0;
+      const activeAlerts = alertsList.filter(isAlertActive);
+
+      activeAlerts.forEach((alert) => {
+        const dist = calculateDistanceKm(userPosition.lat, userPosition.lng, alert.lat, alert.lng);
+        if (dist <= 15) countNearby++;
+
+        let markerClass = 'radar-marker-blitzer';
+        let iconSymbol = '📸';
+        if (alert.type === 'polizei') { markerClass = 'radar-marker-police'; iconSymbol = '🚨'; }
+        else if (alert.type === 'gefahr') { markerClass = 'radar-marker-danger'; iconSymbol = '⚠️'; }
+        else if (alert.type === 'blitzer_stat') { markerClass = 'radar-marker-blitzer'; iconSymbol = '🛑'; }
+
+        const customDivIcon = L.divIcon({
+          className: 'custom-radar-icon',
+          html: `<div class="radar-marker ${markerClass} w-9 h-9 text-base">${iconSymbol}</div>`,
+          iconSize: [36, 36],
+          iconAnchor: [18, 18]
+        });
+
+        const popupContent = `
+          <div class="p-1 text-slate-900">
+            <div class="text-xs font-bold flex items-center gap-1">
+              <span>${iconSymbol}</span>
+              <span>${escapeHTML(alert.location_name)}</span>
+            </div>
+            <div class="text-[11px] text-slate-600 my-1">${escapeHTML(alert.raw_text || 'Keine Zusatzinfo')}</div>
+            <div class="text-[10px] text-blue-600 font-bold">${dist.toFixed(1)} km entfernt</div>
+            <div class="text-[9px] text-slate-400 mt-0.5">vor ${formatRelativeTime(alert.timestamp)}</div>
+          </div>
+        `;
+
+        const marker = L.marker([alert.lat, alert.lng], { icon: customDivIcon }).addTo(mapInstance).bindPopup(popupContent);
+        mapMarkersMap.set(alert.id, marker);
+      });
+
+      document.getElementById('nearby-count-text').textContent = `${countNearby} Meldungen nah`;
+      document.getElementById('feed-badge-count').textContent = activeAlerts.length;
+      document.getElementById('nav-feed-badge').textContent = activeAlerts.length;
+    }
+
+    function updateFeedListUI() {
+      const container = document.getElementById('feed-list-container');
+      if (!container) return;
+
+      const activeAlerts = alertsList.filter(isAlertActive);
+      let filtered = activeAlerts.filter((a) => {
+        if (activeFeedCategory === 'all') return true;
+        if (activeFeedCategory === 'blitzer') return a.type.startsWith('blitzer');
+        return a.type === activeFeedCategory;
+      });
+
+      filtered.sort((a, b) => calculateDistanceKm(userPosition.lat, userPosition.lng, a.lat, a.lng) - calculateDistanceKm(userPosition.lat, userPosition.lng, b.lat, b.lng));
+
+      if (filtered.length === 0) {
+        container.innerHTML = `<div class="p-8 text-center text-slate-500 text-xs glass-card rounded-2xl border border-slate-800">Keine aktiven Meldungen in dieser Kategorie.</div>`;
+        return;
+      }
+
+      container.innerHTML = filtered.map((alert) => {
+        const dist = calculateDistanceKm(userPosition.lat, userPosition.lng, alert.lat, alert.lng);
+        let badgeBg = 'bg-red-500/10 text-red-400 border-red-500/30';
+        let badgeIcon = '📸 Mobiler Blitzer';
+
+        if (alert.type === 'blitzer_stat') { badgeBg = 'bg-red-500/10 text-red-400 border-red-500/30'; badgeIcon = '🛑 Fester Blitzer'; }
+        else if (alert.type === 'polizei') { badgeBg = 'bg-blue-500/10 text-blue-400 border-blue-500/30'; badgeIcon = '🚨 Polizei (max 1h)'; }
+        else if (alert.type === 'gefahr') { badgeBg = 'bg-amber-500/10 text-amber-400 border-amber-500/30'; badgeIcon = '⚠️ Gefahr / Unfall'; }
+
+        return `
+          <div class="glass-card p-3.5 rounded-2xl border border-slate-800 shadow-lg relative overflow-hidden transition hover:border-slate-700">
+            <div class="flex items-start justify-between gap-2 mb-1.5">
+              <span class="text-[10px] font-bold px-2 py-0.5 rounded-full border ${badgeBg}">${badgeIcon}</span>
+              <span class="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                ${dist < 1 ? Math.round(dist * 1000) + ' m' : dist.toFixed(1) + ' km'} entfernt
+              </span>
+            </div>
+            <h3 class="text-xs font-extrabold text-white mb-0.5">${escapeHTML(alert.location_name)}</h3>
+            ${alert.raw_text ? `<p class="text-[11px] text-slate-300 mb-2 leading-relaxed">${escapeHTML(alert.raw_text)}</p>` : ''}
+            <div class="flex items-center justify-between text-[10px] text-slate-400 pt-2 border-t border-slate-800/80">
+              <span>vor ${formatRelativeTime(alert.timestamp)}</span>
+              <div class="flex items-center gap-2">
+                <span class="text-slate-400 text-[9px]">Noch da?</span>
+                <button onclick="voteAlert('${alert.id}', 'up')" class="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 font-bold flex items-center gap-1 transition">👍 <span>${alert.upvotes || 0}</span></button>
+                <button onclick="voteAlert('${alert.id}', 'down')" class="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-red-400 border border-slate-700 font-bold flex items-center gap-1 transition">👎 <span>${alert.downvotes || 0} / 5</span></button>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function voteAlert(alertId, voteType) {
+      const alertItem = alertsList.find(a => a.id === alertId);
+      if (!alertItem) return;
+
+      if (voteType === 'up') alertItem.upvotes = (alertItem.upvotes || 0) + 1;
+      if (voteType === 'down') alertItem.downvotes = (alertItem.downvotes || 0) + 1;
+
+      if ((alertItem.downvotes || 0) >= 5) {
+        showToast("🗑️ Meldung wurde wegen 5 negativen Stimmen gelöscht!");
+        alertsList = alertsList.filter(a => a.id !== alertId);
+      } else {
+        showToast(voteType === 'up' ? '👍 Danke für die Bestätigung!' : `👎 Stimmen: ${alertItem.downvotes}/5 bis Löschung`);
+      }
+      updateAppUI();
+    }
+
+    async function submitNewReport(e) {
+      e.preventDefault();
+      const type = document.querySelector('input[name="alert_type"]:checked').value;
+      const locationInput = document.getElementById('report-location-input').value.trim();
+      const textInput = document.getElementById('report-text-input').value.trim();
+
+      if (!locationInput) return;
+
+      let lat = userPosition.lat;
+      let lng = userPosition.lng;
+
+      if (!locationInput.startsWith('GPS:')) {
+        showToast("🔍 Ort wird gesucht...");
+        const coords = await geocodeAddress(locationInput);
+        if (coords) {
+          lat = coords.lat;
+          lng = coords.lng;
+        }
+      }
+
+      const newAlert = {
+        id: 'user_' + Date.now(),
+        type: type,
+        location_name: locationInput.replace(/^GPS:\s*/, 'Standort '),
+        raw_text: textInput,
+        lat: lat,
+        lng: lng,
+        timestamp: Date.now(),
+        upvotes: 1,
+        downvotes: 0
+      };
+
+      alertsList.unshift(newAlert);
+      closeReportModal();
+      document.getElementById('report-form').reset();
+      showToast("🚀 Meldung erfolgreich veröffentlicht!");
+
+      if (mapInstance) mapInstance.flyTo([lat, lng], 14);
+      updateAppUI();
+    }
+
+    async function geocodeAddress(query) {
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`);
+        const data = await res.json();
+        if (data && data.length > 0) {
+          return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+        }
+      } catch (err) {
+        console.warn("Geocoding error:", err);
+      }
+      return null;
+    }
+
+    function useCurrentGPSForReport() {
+      document.getElementById('report-location-input').value = `GPS: ${userPosition.lat.toFixed(4)}, ${userPosition.lng.toFixed(4)}`;
+      showToast("📍 Aktueller GPS-Standort übernommen");
+    }
+
+    async function searchLocationOnMap() {
+      const query = document.getElementById('map-search-input').value.trim();
+      if (!query) return;
+      showToast("🔍 Suche Ort...");
+      const coords = await geocodeAddress(query);
+      if (mapInstance && coords) {
+        mapInstance.flyTo([coords.lat, coords.lng], 14);
+        showToast(`📍 Gefunden: ${query}`);
+      }
+    }
+
+    let lastWarnedAlertId = null;
+    function checkProximityAndWarn() {
+      if (!audioWarningsEnabled) return;
+      alertsList.forEach((alert) => {
+        const dist = calculateDistanceKm(userPosition.lat, userPosition.lng, alert.lat, alert.lng);
+        if (dist <= 1.0 && lastWarnedAlertId !== alert.id) {
+          lastWarnedAlertId = alert.id;
+          playAudioWarningSound();
+          let alertTypeName = alert.type === 'polizei' ? "Polizeikontrolle" : alert.type === 'gefahr' ? "Gefahr" : "Mobiler Blitzer";
+          speakVoiceWarning(`Achtung! ${alertTypeName} in ${Math.round(dist * 1000)} Metern voraus`);
+          showToast(`🚨 ACHTUNG: ${alertTypeName} in 1.0 km!`);
+        }
+      });
+    }
+
+    function playAudioWarningSound() {
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(1760, audioCtx.currentTime + 0.3);
+        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.3);
+      } catch (e) {}
+    }
+
+    function speakVoiceWarning(text) {
+      if ('speechSynthesis' in window) {
+        const msg = new SpeechSynthesisUtterance(text);
+        msg.lang = 'de-DE';
+        window.speechSynthesis.speak(msg);
+      }
+    }
+
+    function toggleAudioWarning() {
+      audioWarningsEnabled = !audioWarningsEnabled;
+      document.getElementById('audio-icon').textContent = audioWarningsEnabled ? '🔊' : '🔇';
+      document.getElementById('audio-label').textContent = audioWarningsEnabled ? 'Ton An' : 'Stumm';
+      showToast(audioWarningsEnabled ? '🔊 Sprachwarnungen aktiv' : '🔇 Warnungen stummgeschaltet');
+    }
+
+    function calculateDistanceKm(lat1, lon1, lat2, lon2) {
+      const R = 6371;
+      const dLat = (lat2 - lat1) * (Math.PI / 180);
+      const dLon = (lon2 - lon1) * (Math.PI / 180);
+      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+    }
+
+    function formatRelativeTime(timestamp) {
+      const mins = Math.floor((Date.now() - timestamp) / 60000);
+      if (mins < 1) return 'Gerade eben';
+      if (mins < 60) return `${mins} Min.`;
+      return `${Math.floor(mins / 60)} Std.`;
+    }
+
+    function escapeHTML(str) {
+      return (str || '').replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+    }
+
+    function showToast(msg) {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.className = 'bg-slate-800/95 border border-slate-700 text-white text-xs px-3.5 py-2 rounded-xl shadow-2xl backdrop-blur font-semibold';
+      toast.textContent = msg;
+      container.appendChild(toast);
+      setTimeout(() => toast.remove(), 3000);
+    }
+
+    function updateAppUI() {
+      renderMapMarkers();
+      updateFeedListUI();
+    }
+
+    function switchTab(tabName) {
+      ['map', 'feed'].forEach((t) => {
+        document.getElementById(`view-${t}`)?.classList.add('hidden');
+        const navBtn = document.getElementById(`nav-${t}`);
+        if (navBtn) { navBtn.classList.remove('text-blue-500', 'font-bold'); navBtn.classList.add('text-slate-400'); }
+      });
+      document.getElementById(`view-${tabName}`)?.classList.remove('hidden');
+      const targetNav = document.getElementById(`nav-${tabName}`);
+      if (targetNav) { targetNav.classList.remove('text-slate-400'); targetNav.classList.add('text-blue-500', 'font-bold'); }
+      if (tabName === 'map' && mapInstance) setTimeout(() => mapInstance.invalidateSize(), 150);
+    }
+
+    function openReportModal() { document.getElementById('report-modal').classList.remove('hidden'); }
+    function closeReportModal() { document.getElementById('report-modal').classList.add('hidden'); }
+
+    function filterFeed(cat) {
+      activeFeedCategory = cat;
+      ['all', 'blitzer', 'police', 'danger'].forEach((c) => {
+        const btn = document.getElementById(`filter-${c}`);
+        if (btn) btn.className = c === cat ? 'px-3.5 py-1.5 rounded-xl font-semibold bg-blue-600 text-white shrink-0' : 'px-3.5 py-1.5 rounded-xl font-semibold bg-slate-800 text-slate-300 border border-slate-700 shrink-0';
+      });
+      updateFeedListUI();
+    }
+
+    function refreshFeedData() {
+      showToast("🔄 Live-Daten aktualisiert");
+      updateAppUI();
+    }
+
+    window.onload = function() {
+      alertsList = INITIAL_SEED_ALERTS.filter(isAlertActive);
+      initMapEngine();
+      updateAppUI();
+      setInterval(updateAppUI, 60000);
+    };
+  </script>
+</body>
+</html>
